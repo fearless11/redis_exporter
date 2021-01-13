@@ -1,3 +1,5 @@
+DOCKER_IMAGE_NAME=
+TAG_VERSION=
 
 .PHONY: docker-all
 docker-all: docker-env-up docker-test docker-env-down
@@ -18,7 +20,10 @@ docker-test:
 	docker-compose -f contrib/docker-compose-for-tests.yml up -d
 	docker-compose -f contrib/docker-compose-for-tests.yml run --rm tests bash -c 'make test'
 
-
+.PHONY: docker-image:
+docker-image:
+	echo "build docker image"
+	docker build -t $(DOCKER_IMAGE_NAME):$(TAG_VERSION) .
 
 .PHONY: test
 test: 
@@ -73,3 +78,4 @@ build-binaries:
 	gox -os="linux freebsd netbsd"                        -arch="arm"       -verbose -rebuild -ldflags $(GO_LDFLAGS) -output ".build/redis_exporter-${DRONE_TAG}.{{.OS}}-{{.Arch}}/{{.Dir}}" && \
 	gox -os="linux" -arch="arm64 mips64 mips64le ppc64 ppc64le s390x"       -verbose -rebuild -ldflags $(GO_LDFLAGS) -output ".build/redis_exporter-${DRONE_TAG}.{{.OS}}-{{.Arch}}/{{.Dir}}" && \
 	echo "done"
+

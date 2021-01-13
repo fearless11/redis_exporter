@@ -64,6 +64,7 @@ type Exporter struct {
 
 	redisAddr string
 	namespace string
+	node      string //  集群分片
 
 	totalScrapes              prometheus.Counter
 	scrapeDuration            prometheus.Summary
@@ -490,6 +491,7 @@ func NewRedisExporter(redisURI string, opts Options) (*Exporter, error) {
 		"up":                                           {txt: "Information about the Redis instance"},
 		"connected_clients_details":                    {txt: "Details about connected clients", lbls: connectedClientsLabels},
 	} {
+		desc.lbls = append(desc.lbls, "node")
 		e.metricDescriptions[k] = newMetricDescr(opts.Namespace, k, desc.txt, desc.lbls)
 	}
 
@@ -540,16 +542,18 @@ func (e *Exporter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // Describe outputs Redis metric descriptions.
 func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
+
+	labels := []string{"node"}
 	for _, desc := range e.metricDescriptions {
 		ch <- desc
 	}
 
 	for _, v := range e.metricMapGauges {
-		ch <- newMetricDescr(e.options.Namespace, v, v+" metric", nil)
+		ch <- newMetricDescr(e.options.Namespace, v, v+" metric", labels)
 	}
 
 	for _, v := range e.metricMapCounters {
-		ch <- newMetricDescr(e.options.Namespace, v, v+" metric", nil)
+		ch <- newMetricDescr(e.options.Namespace, v, v+" metric", labels)
 	}
 
 	ch <- e.totalScrapes.Desc()
@@ -564,20 +568,45 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	e.totalScrapes.Inc()
 
 	if e.redisAddr != "" {
-		startTime := time.Now()
-		var up float64 = 1
-		if err := e.scrapeRedisHost(ch); err != nil {
-			up = 0
-			e.registerConstMetricGauge(ch, "exporter_last_scrape_error", 1.0, fmt.Sprintf("%s", err))
+		c, err := e.connectToRedis()
+		if err != nil {
+			log.Errorf("Couldn't connect to redis instance")
+			log.Debugf("connectToRedis( %s ) err: %s", e.redisAddr, err)
+			return
+		}
+		defer c.Close()
+
+		// 连接获取集群分片信息
+		var allNode []string
+		if clusterNodes, err := redis.String(doRedisCmd(c, "CLUSTER", "NODES")); err == nil {
+			allNode = e.extractClusterNodes(clusterNodes)
 		} else {
-			e.registerConstMetricGauge(ch, "exporter_last_scrape_error", 0, "")
+			split := strings.Split(e.redisAddr, "/")
+			log.Debugf("redis address split %s", split)
+			if len(split) == 3 {
+				allNode = []string{split[2]}
+			}
 		}
 
-		e.registerConstMetricGauge(ch, "up", up)
+		log.Debugf("cluster master nodes: %s", allNode)
 
-		took := time.Since(startTime).Seconds()
-		e.scrapeDuration.Observe(took)
-		e.registerConstMetricGauge(ch, "exporter_last_scrape_duration_seconds", took)
+		for _, node := range allNode {
+			e.node = node
+			startTime := time.Now()
+			var up float64 = 1
+			if err := e.scrapeRedisHost(ch); err != nil {
+				up = 0
+				e.registerConstMetricGauge(ch, "exporter_last_scrape_error", 1.0, fmt.Sprintf("%s", err))
+			} else {
+				e.registerConstMetricGauge(ch, "exporter_last_scrape_error", 0, "")
+			}
+
+			e.registerConstMetricGauge(ch, "up", up)
+
+			took := time.Since(startTime).Seconds()
+			e.scrapeDuration.Observe(took)
+			e.registerConstMetricGauge(ch, "exporter_last_scrape_duration_seconds", took)
+		}
 	}
 
 	ch <- e.totalScrapes
@@ -812,9 +841,11 @@ func (e *Exporter) registerConstMetricGauge(ch chan<- prometheus.Metric, metric 
 }
 
 func (e *Exporter) registerConstMetric(ch chan<- prometheus.Metric, metric string, val float64, valType prometheus.ValueType, labelValues ...string) {
+	labelValues = append(labelValues, e.node)
 	descr := e.metricDescriptions[metric]
 	if descr == nil {
-		descr = newMetricDescr(e.options.Namespace, metric, metric+" metric", labelValues)
+		labels := []string{"node"}
+		descr = newMetricDescr(e.options.Namespace, metric, metric+" metric", labels)
 	}
 
 	if m, err := prometheus.NewConstMetric(descr, valType, val, labelValues...); err == nil {
@@ -1643,6 +1674,19 @@ func (e *Exporter) scrapeRedisHost(ch chan<- prometheus.Metric) error {
 
 			// in cluster mode Redis only supports one database so no extra DB number padding needed
 			dbCount = 1
+
+			// 集群分片模式
+			infoAll, err = redis.String(doRedisCmd(c, "INFO", "ALL", e.node))
+			if err != nil {
+				log.Debugf("Redis INFO ALL err: %s", err)
+				infoAll, err = redis.String(doRedisCmd(c, "INFO"))
+				if err != nil {
+					log.Errorf("Redis INFO err: %s", err)
+					return err
+				}
+			}
+			log.Debugf("Redis INFO ALL result: [%#v]", infoAll)
+
 		} else {
 			log.Errorf("Redis CLUSTER INFO err: %s", err)
 		}
@@ -1781,4 +1825,20 @@ func (e *Exporter) processSentinelSlaves(ch chan<- prometheus.Metric, slaveDetai
 		masterOkSlaves = masterOkSlaves + 1
 	}
 	e.registerConstMetricGauge(ch, "sentinel_master_ok_slaves", float64(masterOkSlaves), labels...)
+}
+
+// extractClusterNodes  获取集群的节点信息
+func (e *Exporter) extractClusterNodes(nodes string) (allNode []string) {
+	allNode = make([]string, 0)
+	lines := strings.Split(nodes, "\n")
+	for _, line := range lines {
+		log.Debugf("nodes: %s", line)
+		if strings.Contains(line, "master") {
+			split := strings.Split(line, " ")
+			if len(split) > 2 {
+				allNode = append(allNode, split[0])
+			}
+		}
+	}
+	return allNode
 }
