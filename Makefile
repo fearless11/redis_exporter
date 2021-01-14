@@ -1,29 +1,27 @@
-DOCKER_IMAGE_NAME=
-TAG_VERSION=
+DOCKER_IMAGE_NAME="11expose11/redis_exporter"
+TAG_VERSION="qcloud"
 
 .PHONY: docker-all
 docker-all: docker-env-up docker-test docker-env-down
-
 
 .PHONY: docker-env-up
 docker-env-up:
 	docker-compose -f contrib/docker-compose-for-tests.yml up -d
 
-
 .PHONY: docker-env-down
 docker-env-down:
 	docker-compose -f contrib/docker-compose-for-tests.yml down
-
 
 .PHONY: docker-test
 docker-test:
 	docker-compose -f contrib/docker-compose-for-tests.yml up -d
 	docker-compose -f contrib/docker-compose-for-tests.yml run --rm tests bash -c 'make test'
 
-.PHONY: docker-image:
+.PHONY: docker-image
 docker-image:
 	echo "build docker image"
 	docker build -t $(DOCKER_IMAGE_NAME):$(TAG_VERSION) .
+	docker push $(DOCKER_IMAGE_NAME):$(TAG_VERSION)
 
 .PHONY: test
 test: 

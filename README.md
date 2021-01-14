@@ -6,8 +6,45 @@
 Prometheus exporter for Redis metrics.\
 Supports Redis 2.x, 3.x, 4.x, 5.x, and 6.x
 
-
 ## Building and running the exporter
+
+### 开发说明
+- 功能
+  增加标签node，支持监控腾讯云集群Redis
+
+- 样例
+  ```bash
+  # 云上集群redis，六个节点监控每个master
+  # curl -s  127.0.0.1:18085/metrics | grep -w redis_up
+  # HELP redis_up Information about the Redis instance
+  # TYPE redis_up gauge
+  redis_up{node="a57ade003266f98572a1da8d3934d6baa7ebed1b"} 1
+  redis_up{node="aed765d315f2d7830df96af16144cd8b07b273d0"} 1
+  redis_up{node="bf80ed606f5d1d773c9ee70a59be7df7565ceb5e"} 1
+  ```
+
+- 容器部署
+
+  ```bash
+  make docker-image
+
+  docker run -d \
+        --name redis-127.0.0.1-6379 \
+        -m 256m \
+        --net=host \
+        --restart=always \
+        --log-opt max-size=100m \
+        --log-opt max-file=10 \
+        11expose11/redis_exporter:qcloud \
+        -web.listen-address=:9121 \
+        -redis.addr=redis://127.0.0.1:6379 \
+        -redis.password=root@123456 
+  ```
+
+
+- 参考
+  [Prometheus 编写自己的 exporter - 简书](https://www.jianshu.com/p/9646ce49f722)
+
 
 ### Build and run locally
 
@@ -17,7 +54,6 @@ cd redis_exporter
 go build .
 ./redis_exporter --version
 ```
-
 
 ### Pre-build binaries
 
@@ -302,3 +338,5 @@ Or you can bring up the stack, run the tests, and then tear down the stack, all 
 ## Communal effort
 
 Open an issue or PR if you have more suggestions, questions or ideas about what to add.
+
+
